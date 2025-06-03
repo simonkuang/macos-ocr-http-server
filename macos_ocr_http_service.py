@@ -50,9 +50,8 @@ conn.commit()
 
 # === OCR Function ===
 def run_native_ocr(image_path: str) -> str:
-    from Vision import VNImageRequestHandler, VNRecognizeTextRequest
-    from Foundation import NSDictionary, NSURL
-    import Quartz
+    from Vision import VNImageRequestHandler, VNRecognizeTextRequest, VNRequestTextRecognitionLevelAccurate
+    from Foundation import NSData, NSURL, NSDictionary
 
     results_text = []
 
@@ -65,19 +64,17 @@ def run_native_ocr(image_path: str) -> str:
             for c in candidates:
                 results_text.append(str(c.string()))
 
-    image_url = NSURL.fileURLWithPath_(str(image_path))
-    image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
-    if image_source is None:
-        raise ValueError("Failed to create image source")
-    cgimg = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
-    if cgimg is None:
-        raise ValueError("Could not convert image to CGImage")
+    with open(image_path, "rb") as f:
+        img_data = f.read()
+
+    ns_data = NSData.dataWithBytes_length_(img_data, len(img_data))
+    handler = VNImageRequestHandler.alloc().initWithData_options_(ns_data, NSDictionary.dictionary())
 
     request = VNRecognizeTextRequest.alloc().initWithCompletionHandler_(handler_fn)
-    request.setRecognitionLanguages_(["zh-Hans", "zh-Hant", "en-US"])
-    request.setRecognitionLevel_(1)
+    request.setRecognitionLanguages_(["zh-Hans", "en"])
+    request.setUsesLanguageCorrection_(True)
+    request.setRecognitionLevel_(VNRequestTextRecognitionLevelAccurate)
 
-    handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cgimg, NSDictionary.dictionary())
     handler.performRequests_error_([request], None)
 
     return "\n".join(results_text)
@@ -132,3 +129,4 @@ def delete_files(request: Request, file_ids: List[str] = Form(...)):
 
 # === Static ===
 app.mount("/images", StaticFiles(directory=STORAGE_DIR), name="images")
+
