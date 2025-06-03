@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+jinja2
+aiofiles
+python-multipart
+pyobjc-framework-Vision
+pyobjc-core
+pyobjc
+
