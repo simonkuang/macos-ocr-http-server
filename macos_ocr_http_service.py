@@ -3,7 +3,6 @@
 import os
 import uuid
 import shutil
-import asyncio
 import sqlite3
 from fastapi import FastAPI, UploadFile, Form, Request
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
@@ -23,7 +22,7 @@ TEMPLATES_DIR = Path("./templates")
 STORAGE_DIR.mkdir(exist_ok=True)
 TEMPLATES_DIR.mkdir(exist_ok=True, parents=True)
 
-# === CORS (if needed) ===
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -52,7 +51,7 @@ conn.commit()
 # === OCR Function ===
 def run_native_ocr(image_path: str) -> str:
     from Vision import VNImageRequestHandler, VNRecognizeTextRequest
-    from Foundation import NSURL, NSDictionary
+    from Foundation import NSDictionary, NSURL
     import Quartz
 
     results_text = []
@@ -66,59 +65,51 @@ def run_native_ocr(image_path: str) -> str:
             for c in candidates:
                 results_text.append(str(c.string()))
 
-    image_url = NSURL.fileURLWithPath_(image_path)
-    src = Quartz.CGImageSourceCreateWithURL(image_url, None)
-    if src is None:
-        raise ValueError("Could not create image source")
-
-    cgimage = Quartz.CGImageSourceCreateImageAtIndex(src, 0, None)
-    if cgimage is None:
-        raise ValueError("Could not create CGImage from source")
+    image_url = NSURL.fileURLWithPath_(str(image_path))
+    image_source = Quartz.CGImageSourceCreateWithURL(image_url, None)
+    if image_source is None:
+        raise ValueError("Failed to create image source")
+    cgimg = Quartz.CGImageSourceCreateImageAtIndex(image_source, 0, None)
+    if cgimg is None:
+        raise ValueError("Could not convert image to CGImage")
 
     request = VNRecognizeTextRequest.alloc().initWithCompletionHandler_(handler_fn)
     request.setRecognitionLanguages_(["zh-Hans", "zh-Hant", "en-US"])
     request.setRecognitionLevel_(1)
 
-    handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cgimage, NSDictionary.dictionary())
+    handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cgimg, NSDictionary.dictionary())
     handler.performRequests_error_([request], None)
 
     return "\n".join(results_text)
 
-# === Background OCR Task ===
-async def process_image_async(file_id: str, image_path: Path):
-    try:
-        text = run_native_ocr(str(image_path))
-        cursor.execute("UPDATE ocr_results SET text = ?, status = ? WHERE id = ?", (text, "done", file_id))
-    except Exception as e:
-        err_msg = traceback.format_exc()
-        print(f"[ERROR] OCR failed for {file_id}:\n{err_msg}")
-        cursor.execute("UPDATE ocr_results SET text = ?, status = ? WHERE id = ?", (err_msg, "error", file_id))
-    conn.commit()
-
 # === API ===
-@app.post("/upload")
-async def upload_image(file: UploadFile):
+@app.post("/ocr")
+def ocr_image(file: UploadFile):
     file_id = str(uuid.uuid4())
     filename = f"{file_id}_{file.filename}"
     file_path = STORAGE_DIR / filename
     with open(file_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
-    cursor.execute("INSERT INTO ocr_results (id, filename, status) VALUES (?, ?, ?)", (file_id, filename, "processing"))
-    conn.commit()
-    asyncio.create_task(process_image_async(file_id, file_path))
-    return {"file_id": file_id}
 
-@app.get("/status/{file_id}")
-def check_status(file_id: str):
-    cursor.execute("SELECT status FROM ocr_results WHERE id = ?", (file_id,))
-    row = cursor.fetchone()
-    return {"file_id": file_id, "status": row[0] if row else "not_found"}
+    try:
+        text = run_native_ocr(str(file_path))
+        cursor.execute("INSERT INTO ocr_results (id, filename, text, status) VALUES (?, ?, ?, ?)", (file_id, filename, text, "done"))
+        conn.commit()
+        return {"file_id": file_id, "text": text, "status": "done"}
+    except Exception as e:
+        err_msg = traceback.format_exc()
+        print(f"[ERROR] OCR failed for {file_id}:\n{err_msg}")
+        cursor.execute("INSERT INTO ocr_results (id, filename, text, status) VALUES (?, ?, ?, ?)", (file_id, filename, err_msg, "error"))
+        conn.commit()
+        return {"file_id": file_id, "text": None, "status": "error", "error": str(e)}
 
 @app.get("/result/{file_id}")
 def get_result(file_id: str):
-    cursor.execute("SELECT text FROM ocr_results WHERE id = ?", (file_id,))
+    cursor.execute("SELECT text, status FROM ocr_results WHERE id = ?", (file_id,))
     row = cursor.fetchone()
-    return {"file_id": file_id, "text": row[0] if row else None}
+    if not row:
+        return {"file_id": file_id, "text": None, "status": "not_found"}
+    return {"file_id": file_id, "text": row[0], "status": row[1]}
 
 @app.get("/admin")
 def admin_page(request: Request):
@@ -141,4 +132,3 @@ def delete_files(request: Request, file_ids: List[str] = Form(...)):
 
 # === Static ===
 app.mount("/images", StaticFiles(directory=STORAGE_DIR), name="images")
-
