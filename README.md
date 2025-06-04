@@ -72,5 +72,15 @@
 
 ---
 
-如果你希望我同时生成配套的 `requirements.txt` 和 HTML 模板，可以继续告诉我。
+## 🕷 爬虫脚本
 
+### 1. Youtube 列表信息爬虫
+
+**代码：** `/misc/youtube_list_scrapper.js`
+**使用方法：**
+
+0. 开启 MacOS OCR HTTP Server
+1. 打开 youtube 的作者页面
+2. 往下刷瀑布流，确保要采集的内容都加载完
+3. 将 js 代码复制到浏览器的控制台里面，执行
+4. 自动开启下载，保存采集到的数据
